@@ -1,0 +1,13 @@
+{
+  "scripts": {
+    "start": "npm --prefix unistay-frontend run dev",
+    "build": "npm --prefix unistay-frontend run build",
+    "preview": "npm --prefix unistay-frontend run preview",
+    "install-frontend": "npm --prefix unistay-frontend install"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.5.4",
+    "postcss": "^8.5.25",
+    "tailwindcss": "^4.3.3"
+  }
+}
