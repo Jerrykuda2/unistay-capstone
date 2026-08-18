@@ -1,34 +1,87 @@
+import { Link } from 'react-router-dom'
+import { HiOutlineLocationMarker } from 'react-icons/hi'
+
 export default function ListingCard({ listing }) {
+  const {
+    id = 1,
+    title = 'Modern Student Room',
+    price,
+    rent_amount,
+    description = 'Spacious and well-lit room close to campus, equipped with high-speed internet and quiet study desk.',
+    location = 'Near GCTU Campus',
+    distance_to_campus,
+    image_url,
+    images = [],
+  } = listing || {}
+
+  const displayPrice = price ?? rent_amount ?? '850'
+  const imageSrc = image_url || images?.[0] || '/Background.jpg'
+
   return (
-    <article className="overflow-hidden rounded-[1.5rem] border border-slate-200 bg-white shadow-sm transition hover:shadow-md">
-      <div className="relative h-52 overflow-hidden bg-slate-100">
-        <img src={listing.image} alt={listing.title} className="h-full w-full object-cover" />
-        {listing.verified && (
-          <span className="absolute left-4 top-4 rounded-full bg-white px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-slate-900 shadow-sm">
-            Verified
+    <Link
+      to={`/listing/${id}`}
+      className="
+        group
+        flex
+        w-full
+        flex-col
+        overflow-hidden
+        rounded-3xl
+        border
+        border-black/10
+        bg-white
+        p-3.5
+        shadow-[0_8px_30px_rgb(0,0,0,0.04)]
+        transition-all
+        duration-300
+        hover:-translate-y-1.5
+        hover:shadow-[0_20px_40px_rgba(22,17,11,0.08)]
+      "
+    >
+      {/* Image container with subtle zoom on hover */}
+      <div className="relative aspect-[4/3] w-full overflow-hidden rounded-2xl bg-stone-100">
+        <img
+          src={imageSrc}
+          alt={title}
+          className="
+            h-full
+            w-full
+            object-cover
+            transition-transform
+            duration-500
+            ease-out
+            group-hover:scale-105
+          "
+        />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/20 via-transparent to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
+      </div>
+
+      {/* Content Area */}
+      <div className="flex flex-1 flex-col px-1 pb-1 pt-4">
+        {/* Title + Price Badge on the same row */}
+        <div className="flex items-start justify-between gap-3">
+          <h3 className="min-w-0 font-heading text-lg font-bold leading-tight tracking-tight text-[#16110b] group-hover:text-[#a67c52] transition-colors">
+            {title}
+          </h3>
+
+          <span className="shrink-0 rounded-full bg-[#f8efe6] px-3 py-1 text-xs font-bold text-[#a67c52] border border-[#c7a57a]/20">
+            GHS {displayPrice}/mo
           </span>
-        )}
-      </div>
-      <div className="space-y-3 p-5">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h3 className="text-lg font-semibold text-slate-900">{listing.title}</h3>
-            <p className="text-sm text-slate-600">{listing.location} • {listing.room_type}</p>
-          </div>
-          <p className="text-sm font-semibold text-slate-900">GHS {listing.price_ghs.toLocaleString()} / academic year</p>
         </div>
-        <p className="text-sm leading-6 text-slate-600">{listing.description}</p>
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-700">{listing.room_type}</span>
-          <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-700">{listing.location}</span>
-        </div>
-        <div className="flex items-center justify-between gap-3 pt-3 border-t border-slate-200">
-          <p className="text-sm text-slate-600">Contact: {listing.contact_number}</p>
-          <button className="rounded-2xl border border-slate-200 bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800">
-            Inquire
-          </button>
+
+        {/* Description - max 2 lines */}
+        <p className="mt-2.5 line-clamp-2 text-sm leading-relaxed text-[#2f261d]/70">
+          {description}
+        </p>
+
+        {/* Location with HiOutlineLocationMarker */}
+        <div className="mt-auto flex items-center gap-1.5 pt-4 text-xs font-medium text-[#2f261d]/60">
+          <HiOutlineLocationMarker className="h-4 w-4 shrink-0 text-[#a67c52]" />
+          <span className="truncate">
+            {location || (distance_to_campus ? `${distance_to_campus} km to campus` : 'Near campus')}
+          </span>
         </div>
       </div>
-    </article>
+    </Link>
   )
-}
+}

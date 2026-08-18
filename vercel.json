@@ -1,0 +1,18 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "unistay-frontend/package.json",
+      "use": "@vercel/static-build",
+      "config": {
+        "distDir": "unistay-frontend/dist"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "unistay-frontend/$1"
+    }
+  ]
+}

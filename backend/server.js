@@ -3,81 +3,85 @@ const cors = require('cors');
 require('dotenv').config();
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const {OAuth2Client} = require('google-auth-library');
+const { S3Client } = require('@aws-sdk/client-s3');
+const multer = require('multer');
+const multerS3 = require('multer-s3');
 
 // Ensure this path matches where your db.js file actually is!
-// If it's in a config folder, use './config/db'
-const db = require('./config/db');
-
-// Google OAuth client - requires VITE_GOOGLE_CLIENT_ID / GOOGLE_CLIENT_ID in env
-const googleClient = process.env.GOOGLE_CLIENT_ID ? new OAuth2Client(process.env.GOOGLE_CLIENT_ID) : null;
+const db = require('./config/db.js');
 
 const app = express();
 
-// --- Middleware ---
 app.use(cors());
 app.use(express.json());
 
-// --- Test Routes ---
+// --- 1. S3 CONFIGURATION ---
+const s3 = new S3Client({
+  region: process.env.AWS_REGION || 'eu-north-1',
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+  }
+});
 
-// Basic Health Check Endpoint
+const upload = multer({
+  storage: multerS3({
+    s3: s3,
+    bucket: process.env.S3_BUCKET_NAME || 'unistay-uploads-jerry',
+    metadata: (req, file, cb) => {
+      cb(null, { fieldName: file.fieldname });
+    },
+    key: (req, file, cb) => {
+      const fileName = `hostels/${Date.now()}_${file.originalname}`;
+      cb(null, fileName);
+    }
+  })
+});
+
+// --- 2. AUTHENTICATION MIDDLEWARE ---
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (!token) {
+        return res.status(401).json({ error: 'Access denied. No token provided.' });
+    }
+
+    jwt.verify(token, process.env.JWT_SECRET, (err, decodedUser) => {
+        if (err) {
+            return res.status(403).json({ error: 'Invalid or expired token.' });
+        }
+        req.user = decodedUser; 
+        next(); 
+    });
+};
+
+// --- 3. TEST & HEALTH ROUTES ---
 app.get('/', (req, res) => {
     res.status(200).json({ message: 'UniStay API is running smoothly.' });
 });
 
-// Database Connection Test Route
 app.get('/api/db-status', (req, res) => {
     db.query('SELECT "UniStay backend is talking to AWS RDS!" AS message', (err, results) => {
-        if (err) {
-            console.error('Database query failed:', err.message);
-            return res.status(500).json({ 
-                success: false, 
-                message: 'Failed to connect to the database',
-                error: err.message 
-            });
-        }
-        res.status(200).json({ 
-            success: true, 
-            database_response: results[0] 
-        });
+        if (err) return res.status(500).json({ success: false, message: 'DB connection failed', error: err.message });
+        res.status(200).json({ success: true, database_response: results[0] });
     });
 });
 
-app.get('/api/debug/listings', (req, res) => {
-    db.query('DESCRIBE listings', (err, results) => {
-        if (err) return res.status(500).json(err);
-        
-        // This will grab the exact column names from your database
-        const columns = results.map(col => col.Field);
-        res.status(200).json({ exact_columns: columns });
-    });
-});
-
-// --- User Routes ---
-
-// Register a new user
+// --- 4. USER AUTHENTICATION ROUTES ---
 app.post('/api/users', async (req, res) => {
     try {
-        const { first_name, last_name, email, password, role } = req.body;
-
-        // 1. Hash the password before it goes anywhere near the database
+        const { name, email, password, role } = req.body;
         const saltRounds = 10;
-        const password_hash = await bcrypt.hash(password, saltRounds);
+        const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-        // 2. Insert the user with the newly generated password_hash
-        const sql = 'INSERT INTO users (first_name, last_name, email, password_hash, role) VALUES (?, ?, ?, ?, ?)';
-        const values = [first_name, last_name, email, password_hash, role];
-
-        db.query(sql, values, (err, result) => {
+        const sql = 'INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)';
+        db.query(sql, [name, email, hashedPassword, role || 'student'], (err, result) => {
             if (err) {
                 console.error('Database insertion error:', err);
                 return res.status(500).json({ error: 'Failed to create user in database.' });
             }
-            
-            res.status(201).json({ 
-                message: 'User registered successfully!',
-                userId: result.insertId 
-            });
+            res.status(201).json({ message: 'User registered successfully!', userId: result.insertId });
         });
     } catch (error) {
         console.error('Hashing error:', error);
@@ -85,68 +89,26 @@ app.post('/api/users', async (req, res) => {
     }
 });
 
-// Fetch all users (GET request)
-app.get('/api/users', (req, res) => {
-    // Note: We intentionally leave out the password_hash for security
-    const sql = 'SELECT id, first_name, last_name, email, role, created_at FROM users';
-    
-    db.query(sql, (err, results) => {
-        if (err) {
-            console.error('Error fetching users:', err);
-            return res.status(500).json({ error: 'Failed to retrieve users from database.' });
-        }
-        
-        // Send the array of users back to Thunder Client
-        res.status(200).json(results);
-    });
-});
-
-// Login an existing user and generate a JWT
 app.post('/api/users/login', (req, res) => {
     const { email, password } = req.body;
-
-    // 1. Check if the user exists in the database
     const sql = 'SELECT * FROM users WHERE email = ?';
     
     db.query(sql, [email], async (err, results) => {
-        if (err) {
-            console.error('Database error during login:', err);
-            return res.status(500).json({ error: 'Server error during login.' });
-        }
-        
-        // If no user is found with that email
-        if (results.length === 0) {
-            return res.status(401).json({ error: 'Invalid email or password.' });
-        }
+        if (err) return res.status(500).json({ error: 'Server error during login.' });
+        if (results.length === 0) return res.status(401).json({ error: 'Invalid email or password.' });
 
         const user = results[0];
 
         try {
-            // 2. Compare the provided password with the hashed password in the database
-            const isMatch = await bcrypt.compare(password, user.password_hash);
-            
-            if (!isMatch) {
-                return res.status(401).json({ error: 'Invalid email or password.' });
-            }
+            const isMatch = await bcrypt.compare(password, user.password);
+            if (!isMatch) return res.status(401).json({ error: 'Invalid email or password.' });
 
-            // 3. Generate the JSON Web Token
-            const token = jwt.sign(
-                { id: user.id, role: user.role }, 
-                process.env.JWT_SECRET, 
-                { expiresIn: '2h' } // Token expires in 2 hours
-            );
+            const token = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '2h' });
 
-            // 4. Send the token and user details back to the client
             res.status(200).json({
                 message: 'Login successful!',
                 token: token,
-                user: {
-                    id: user.id,
-                    first_name: user.first_name,
-                    last_name: user.last_name,
-                    email: user.email,
-                    role: user.role
-                }
+                user: { id: user.id, name: user.name, email: user.email, role: user.role }
             });
         } catch (error) {
             console.error('Error comparing passwords:', error);
@@ -155,170 +117,57 @@ app.post('/api/users/login', (req, res) => {
     });
 });
 
-// --- Middleware for Protected Routes ---
-// Middleware to verify the JWT token
-const authenticateToken = (req, res, next) => {
-    // The token usually comes in the header as: "Bearer <token>"
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
-
-    if (!token) {
-        return res.status(401).json({ error: 'Access denied. No token provided.' });
-    }
-
-    // Verify the token using your secret key
-    jwt.verify(token, process.env.JWT_SECRET, (err, decodedUser) => {
-        if (err) {
-            return res.status(403).json({ error: 'Invalid or expired token.' });
-        }
-        
-        // Attach the decoded user data (like id and role) to the request
-        req.user = decodedUser; 
-        
-        // Pass control to the next function (the actual route)
-        next(); 
-    });
-};
-
-// --- Listing Routes ---
-
-// Create a new property listing (POST request)
+// --- 5. LISTINGS ROUTES ---
 app.post('/api/listings', (req, res) => {
-    // 1. Grab the listing details from Thunder Client
-    // Note: host_id will tie this listing to the user you just created!
-    const { host_id, title, description, price, location } = req.body;
+    const { title, location, room_type, price_ghs, contact_number, description, image_url } = req.body;
 
-    // 2. Write the SQL query 
-    const sql = 'INSERT INTO listings (host_id, title, description, price, location) VALUES (?, ?, ?, ?, ?)';
-    const values = [host_id, title, description, price, location];
+    const sql = `
+        INSERT INTO listings (title, location, room_type, price_ghs, contact_number, description, image_url, verified) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+    const values = [title, location, room_type, price_ghs, contact_number, description, image_url, false];
 
-    // 3. Execute the query
     db.query(sql, values, (err, result) => {
         if (err) {
             console.error('Error creating listing:', err);
             return res.status(500).json({ error: 'Failed to create listing in database.' });
         }
-        
-        res.status(201).json({ 
-            message: 'Listing created successfully!', 
-            listingId: result.insertId 
-        });
+        res.status(201).json({ message: 'Listing created successfully!', listingId: result.insertId });
     });
 });
 
-// Fetch all listings (GET request)
 app.get('/api/listings', (req, res) => {
-    // Grab all listings, newest first
-    const sql = 'SELECT id, host_id, title, description, price, location, created_at FROM listings ORDER BY created_at DESC';
+    const sql = 'SELECT * FROM listings ORDER BY created_at DESC';
     
     db.query(sql, (err, results) => {
         if (err) {
             console.error('Error fetching listings:', err);
-            return res.status(500).json({ error: 'Failed to retrieve listings from database.' });
+            return res.status(500).json({ error: 'Failed to retrieve listings.' });
         }
-        
         res.status(200).json(results);
     });
 });
 
-// --- Roommate Routes ---
+// --- 6. S3 UPLOAD ROUTE ---
+app.post('/api/upload', upload.single('image'), (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'No image file provided' });
+    res.json({ imageUrl: req.file.location });
+});
 
-// Create a new roommate profile (PROTECTED ROUTE)
+// --- 7. ROOMMATE ROUTES ---
 app.post('/api/roommates', authenticateToken, (req, res) => {
-    // We grab the user_id securely from the verified token, not req.body
     const user_id = req.user.id; 
     const { bio, max_budget, lifestyle_habits } = req.body;
-
     const sql = 'INSERT INTO roommate_profiles (user_id, bio, max_budget, lifestyle_habits) VALUES (?, ?, ?, ?)';
-    const values = [user_id, bio, max_budget, lifestyle_habits];
-
-    db.query(sql, values, (err, result) => {
-        if (err) {
-            console.error('Error creating roommate profile:', err);
-            return res.status(500).json({ error: 'Failed to create profile.' });
-        }
-        
-        res.status(201).json({ 
-            message: 'Roommate profile created successfully!', 
-            profileId: result.insertId 
-        });
+    
+    db.query(sql, [user_id, bio, max_budget, lifestyle_habits], (err, result) => {
+        if (err) return res.status(500).json({ error: 'Failed to create profile.' });
+        res.status(201).json({ message: 'Roommate profile created!', profileId: result.insertId });
     });
 });
 
-// --- Server Initialization ---
+// --- SERVER INITIALIZATION ---
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
     console.log(`Server is actively listening on port ${PORT}`);
-});
-
-// Google OAuth login/signup endpoint
-app.post('/api/users/google', async (req, res) => {
-    // Dev bypass: when GOOGLE_OAUTH_DISABLED=true (non-production), allow posting { email, first_name, last_name }
-    if (process.env.GOOGLE_OAUTH_DISABLED === 'true') {
-        const { email, first_name = '', last_name = '' } = req.body;
-        if (!email) return res.status(400).json({ error: 'Missing email for dev Google login' });
-
-        // Reuse same logic as verified flow: check user and create if missing
-        db.query('SELECT * FROM users WHERE email = ?', [email], (err, results) => {
-            if (err) return res.status(500).json({ error: 'Database error' });
-
-            if (results.length > 0) {
-                const user = results[0];
-                const token = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '2h' });
-                return res.status(200).json({ message: 'Login successful (dev)', token, user: { id: user.id, first_name: user.first_name, last_name: user.last_name, email: user.email, role: user.role } });
-            }
-
-            const sql = 'INSERT INTO users (first_name, last_name, email, password_hash, role) VALUES (?, ?, ?, ?, ?)';
-            const values = [first_name, last_name, email, '', 'student'];
-
-            db.query(sql, values, (insertErr, result) => {
-                if (insertErr) return res.status(500).json({ error: 'Failed to create user' });
-                const userId = result.insertId;
-                const token = jwt.sign({ id: userId, role: 'student' }, process.env.JWT_SECRET, { expiresIn: '2h' });
-                res.status(201).json({ message: 'User created via Google (dev)', token, user: { id: userId, first_name, last_name, email, role: 'student' } });
-            });
-        });
-
-        return;
-    }
-
-    const { id_token } = req.body;
-
-    if (!id_token) return res.status(400).json({ error: 'Missing id_token' });
-    if (!googleClient) return res.status(500).json({ error: 'Google OAuth not configured on server.' });
-
-    try {
-        const ticket = await googleClient.verifyIdToken({ idToken: id_token, audience: process.env.GOOGLE_CLIENT_ID });
-        const payload = ticket.getPayload();
-        const email = payload.email;
-        const first_name = payload.given_name || '';
-        const last_name = payload.family_name || '';
-
-        // Check if user exists
-        db.query('SELECT * FROM users WHERE email = ?', [email], (err, results) => {
-            if (err) return res.status(500).json({ error: 'Database error' });
-
-            if (results.length > 0) {
-                const user = results[0];
-                const token = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '2h' });
-                return res.status(200).json({ message: 'Login successful', token, user: { id: user.id, first_name: user.first_name, last_name: user.last_name, email: user.email, role: user.role } });
-            }
-
-            // Create new user with no password (OAuth user)
-            const sql = 'INSERT INTO users (first_name, last_name, email, password_hash, role) VALUES (?, ?, ?, ?, ?)';
-            const values = [first_name, last_name, email, '', 'student'];
-
-            db.query(sql, values, (insertErr, result) => {
-                if (insertErr) return res.status(500).json({ error: 'Failed to create user' });
-
-                const userId = result.insertId;
-                const token = jwt.sign({ id: userId, role: 'student' }, process.env.JWT_SECRET, { expiresIn: '2h' });
-
-                res.status(201).json({ message: 'User created via Google', token, user: { id: userId, first_name, last_name, email, role: 'student' } });
-            });
-        });
-    } catch (error) {
-        console.error('Google token verification failed:', error);
-        res.status(401).json({ error: 'Invalid Google ID token' });
-    }
 });
