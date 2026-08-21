@@ -133,8 +133,11 @@ export default function LoginPage() {
 
         <div className="mt-8 flex items-center justify-center gap-2 border-t border-black/5 pt-6 text-center text-xs text-[#2f261d]/70">
           <HiOutlineShieldCheck className="h-4 w-4 text-[#a67c52]" />
+<p className="mt-4 text-center">
+  Don't have an account? <Link to="/register" className="font-bold text-blue-500">Register here</Link>
+</p>
 
-        </div>
+       </div>
       </div>
     </div>
   )
