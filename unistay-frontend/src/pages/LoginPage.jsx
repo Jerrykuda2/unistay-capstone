@@ -22,7 +22,7 @@ export default function LoginPage() {
 
     try {
       // Connect directly to your local Express server
-      const res = await fetch('http://localhost:5000/api/users/login', {
+      const res = await fetch('http://'api/users/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
